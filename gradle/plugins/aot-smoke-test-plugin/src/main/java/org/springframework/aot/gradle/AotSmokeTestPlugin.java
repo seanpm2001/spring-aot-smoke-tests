@@ -33,8 +33,6 @@ import org.graalvm.buildtools.gradle.tasks.BuildNativeImageTask;
 import org.gradle.api.JavaVersion;
 import org.gradle.api.Plugin;
 import org.gradle.api.Project;
-import org.gradle.api.artifacts.Configuration;
-import org.gradle.api.artifacts.dsl.DependencyHandler;
 import org.gradle.api.file.Directory;
 import org.gradle.api.file.RegularFile;
 import org.gradle.api.plugins.ExtensionAware;
@@ -47,9 +45,10 @@ import org.gradle.api.tasks.TaskProvider;
 import org.gradle.api.tasks.testing.Test;
 import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile;
 
+import org.springframework.aot.gradle.SmokeTest.SlackNotifications;
 import org.springframework.aot.gradle.dsl.AotSmokeTestExtension;
 import org.springframework.aot.gradle.tasks.AppTest;
-import org.springframework.aot.gradle.tasks.DescribeSmokeTests;
+import org.springframework.aot.gradle.tasks.GenerateGitHubActionsWorkflow;
 import org.springframework.aot.gradle.tasks.StartApplication;
 import org.springframework.aot.gradle.tasks.StartJvmApplication;
 import org.springframework.aot.gradle.tasks.StartNativeApplication;
@@ -108,19 +107,23 @@ public class AotSmokeTestPlugin implements Plugin<Project> {
 		configureTests(project);
 		configureKotlin(project, javaExtension);
 		configureJavaFormat(project);
-		Configuration smokeTests = project.getConfigurations().create("smokeTests");
-		TaskProvider<DescribeSmokeTests> describeSmokeTests = project.getTasks()
-			.register("describeSmokeTests", DescribeSmokeTests.class);
-		describeSmokeTests.configure((task) -> {
-			task.getOutputDirectory().set(project.getLayout().getBuildDirectory().dir(task.getName()));
-			task.setAppTests(appTest.getAllSource());
-			task.setTests(javaExtension.getSourceSets().getByName(SourceSet.TEST_SOURCE_SET_NAME).getAllSource());
-			task.setSlackNotifications(extension.getSlackNotifications());
+		TaskProvider<GenerateGitHubActionsWorkflow> updateGitHubActionsWorkflow = project.getTasks()
+			.register("generateGitHubActionsWorkflow", GenerateGitHubActionsWorkflow.class);
+		updateGitHubActionsWorkflow.configure((task) -> {
+			task.getSmokeTest().set(project.provider(() -> {
+				boolean tests = !javaExtension.getSourceSets()
+					.getByName(SourceSet.TEST_SOURCE_SET_NAME)
+					.getAllSource()
+					.isEmpty();
+				boolean appTests = !appTest.getAllSource().isEmpty();
+				String slackChannel = extension.getSlackNotifications().getChannel().getOrNull();
+				return new SmokeTest(project.getName(), project.getParent().getName(), project.getPath(), tests,
+						appTests,
+						(slackChannel != null) ? new SlackNotifications(slackChannel,
+								extension.getSlackNotifications().getOnSuccess().get(),
+								extension.getSlackNotifications().getOnFailure().get()) : null);
+			}));
 		});
-		project.artifacts((artifacts) -> artifacts.add(smokeTests.getName(), describeSmokeTests));
-		DependencyHandler dependencies = project.getRootProject().getDependencies();
-		dependencies.add("smokeTests",
-				dependencies.project(Map.of("path", project.getPath(), "configuration", smokeTests.getName())));
 	}
 
 	private void configureAppTests(Project project, AotSmokeTestExtension extension, SourceSet appTest) {
